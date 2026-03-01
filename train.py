@@ -14,6 +14,8 @@ from utils import plot_training_curves, plot_confusion_matrix, plot_data_distrib
 
 def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=25, device='cuda', save_dir='results', start_epoch=0):
     since = time.time()
+    use_amp = (device if isinstance(device, str) else device.type) == 'cuda'
+    scaler  = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_loss = float('inf') # Stopping criterion based on validation loss
@@ -23,8 +25,8 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
     train_accs = []
     val_accs = []
     
-    if not os.path.exists('checkpoints'):
-        os.makedirs('checkpoints')
+    checkpoint_dir = os.path.join(save_dir, 'checkpoints')
+    os.makedirs(checkpoint_dir, exist_ok=True)
         
     best_val_acc = 0.0
 
@@ -48,21 +50,26 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
                     inputs = inputs.to(device)
                     labels = labels.to(device)
 
-                    # Zero the parameter gradients
-                    optimizer.zero_grad()
+                    # Zero the parameter gradients (moved to after step for AMP efficiency)
+                    if phase != 'train':
+                        optimizer.zero_grad(set_to_none=True)
 
                     # Forward
                     # Track history if only in train
                     with torch.set_grad_enabled(phase == 'train'):
-                        outputs = model(inputs)
-                        _, preds = torch.max(outputs, 1)
-                        loss = criterion(outputs, labels)
+                        with torch.autocast(device_type='cuda', enabled=use_amp):
+                            outputs = model(inputs)
+                            _, preds = torch.max(outputs, 1)
+                            loss = criterion(outputs, labels)
 
                         # Backward + optimize only if in training phase
                         if phase == 'train':
-                            loss.backward()
+                            scaler.scale(loss).backward()
+                            scaler.unscale_(optimizer)
                             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                            optimizer.step()
+                            scaler.step(optimizer)
+                            scaler.update()
+                            optimizer.zero_grad(set_to_none=True)
 
                     # Statistics
                     running_loss += loss.item() * inputs.size(0)
@@ -87,7 +94,7 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
                     if epoch_acc > best_val_acc:
                         best_val_acc = epoch_acc
                         best_model_wts = copy.deepcopy(model.state_dict())
-                        checkpoint_path = os.path.join('checkpoints', f'checkpoint_epoch_{epoch}_acc_{epoch_acc:.4f}.pth')
+                        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}_acc_{epoch_acc:.4f}.pth')
                         torch.save({
                             'epoch': epoch,
                             'model_state_dict': model.state_dict(),

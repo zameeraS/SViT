@@ -55,25 +55,43 @@ class OCTDataset(Dataset):
 
         return image, label
 
-def get_data_loaders(data_dir, batch_size=32, num_workers=4):
+def get_data_loaders(data_dir, batch_size=32, num_workers=8):
     """
     Creates DataLoaders for train, val, and test splits.
+    Uses separate augmentation transforms for train vs val/test.
     """
     # SqueezeNet requires 227x227 input
-    transform = transforms.Compose([
+    train_transform = transforms.Compose([
+        transforms.Resize((227, 227)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    val_transform = transforms.Compose([
         transforms.Resize((227, 227)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
+    transform_map = {'train': train_transform, 'val': val_transform, 'test': val_transform}
+
     datasets = {
-        x: OCTDataset(data_dir, split=x, transform=transform)
+        x: OCTDataset(data_dir, split=x, transform=transform_map[x])
         for x in ['train', 'val', 'test']
     }
 
     dataloaders = {
-        x: DataLoader(datasets[x], batch_size=batch_size, shuffle=(x == 'train'), 
-                      num_workers=num_workers, pin_memory=True)
+        x: DataLoader(
+            datasets[x],
+            batch_size=batch_size,
+            shuffle=(x == 'train'),
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=(num_workers > 0),
+        )
         for x in ['train', 'val', 'test']
     }
 
