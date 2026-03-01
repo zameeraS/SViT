@@ -5,13 +5,14 @@ from torch.optim import lr_scheduler
 import time
 import copy
 import os
+import argparse
 import numpy as np
 from sklearn.metrics import confusion_matrix, roc_auc_score, f1_score, precision_score, recall_score, accuracy_score
 from dataset import get_data_loaders
 from model import SViT
 from utils import plot_training_curves, plot_confusion_matrix, plot_data_distribution
 
-def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=25, device='cuda'):
+def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=25, device='cuda', save_dir='results', start_epoch=0):
     since = time.time()
 
     best_model_wts = copy.deepcopy(model.state_dict())
@@ -28,7 +29,7 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
     best_val_acc = 0.0
 
     try:
-        for epoch in range(num_epochs):
+        for epoch in range(start_epoch, num_epochs):
             print(f'Epoch {epoch}/{num_epochs - 1}')
             print('-' * 10)
 
@@ -97,7 +98,7 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
                         print(f"  Validation accuracy improved to {epoch_acc:.4f}. Saved checkpoint to {checkpoint_path}")
             
             # Update plots at the end of each epoch
-            plot_training_curves(train_losses, val_losses, train_accs, val_accs)
+            plot_training_curves(train_losses, val_losses, train_accs, val_accs, save_dir=save_dir)
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving plots and best model...")
         torch.save(model.state_dict(), 'interrupted_model.pth')
@@ -110,9 +111,16 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
     model.load_state_dict(best_model_wts)
     
     # Save plots
-    plot_training_curves(train_losses, val_losses, train_accs, val_accs)
+    plot_training_curves(train_losses, val_losses, train_accs, val_accs, save_dir=save_dir)
     
-    return model
+    history = {
+        'train_loss': train_losses,
+        'val_loss': val_losses,
+        'train_acc': train_accs,
+        'val_acc': val_accs
+    }
+    
+    return model, history
 
 def evaluate_model(model, dataloaders, device='cuda'):
     model.eval()
@@ -169,8 +177,29 @@ def evaluate_model(model, dataloaders, device='cuda'):
     # Plot Confusion Matrix
     classes = dataloaders['test'].dataset.classes
     plot_confusion_matrix(cm, classes)
+    
+    # Save report to text file
+    report_path = os.path.join('results', 'report.txt')
+    with open(report_path, 'w') as f:
+        f.write("SViT Model Evaluation Report\n")
+        f.write("============================\n\n")
+        f.write(f"Test Accuracy: {acc:.4f}\n")
+        f.write(f"Specificity:   {specificity:.4f}\n")
+        f.write(f"Sensitivity:   {sensitivity:.4f}\n")
+        f.write(f"Precision:     {precision:.4f}\n")
+        f.write(f"F1 Score:      {f1:.4f}\n")
+        f.write(f"AUC:           {auc:.4f}\n\n")
+        f.write("Confusion Matrix:\n")
+        f.write(str(cm))
+        f.write("\n")
+        
+    print(f"Report saved to {report_path}")
 
 def main():
+    parser = argparse.ArgumentParser(description='Train SViT Model')
+    parser.add_argument('--resume', type=str, default=None, help='path to checkpoint to resume from')
+    args = parser.parse_args()
+
     # Hyperparameters
     BATCH_SIZE = 32
     LEARNING_RATE = 0.0001
@@ -213,8 +242,24 @@ def main():
     # Assuming step size of 30 based on typical 100 epoch runs
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
+    start_epoch = 0
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print(f"=> loading checkpoint '{args.resume}'")
+            checkpoint = torch.load(args.resume)
+            start_epoch = checkpoint['epoch'] + 1
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # We don't strictly need to load scheduler state if we just re-create it, 
+            # but ideally we should. However, StepLR is stateless mostly except for last_epoch.
+            # Let's just update the scheduler's last_epoch
+            exp_lr_scheduler.last_epoch = start_epoch - 1
+            print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint['epoch']})")
+        else:
+            print(f"=> no checkpoint found at '{args.resume}'")
+
     # Train
-    model = train_model(model, dataloaders, criterion, optimizer, exp_lr_scheduler, num_epochs=NUM_EPOCHS, device=device)
+    model, history = train_model(model, dataloaders, criterion, optimizer, exp_lr_scheduler, num_epochs=NUM_EPOCHS, device=device, start_epoch=start_epoch)
 
     # Save the final model (or best model returned by train_model)
     torch.save(model.state_dict(), 'final_model.pth')

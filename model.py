@@ -133,11 +133,11 @@ class VisionTransformer(nn.Module):
         return x
 
 class SViT(nn.Module):
-    def __init__(self, num_classes=4):
+    def __init__(self, num_classes=4, vit_layers=3, vit_heads=8, vit_dim=512, dropout=0.1):
         super(SViT, self).__init__()
         self.squeezenet = ModifiedSqueezeNet()
         # SqueezeNet output channels = 512
-        self.vit = VisionTransformer(input_dim=512, hidden_dim=512, num_classes=num_classes, num_layers=3)
+        self.vit = VisionTransformer(input_dim=512, hidden_dim=vit_dim, num_classes=num_classes, num_layers=vit_layers, num_heads=vit_heads, dropout=dropout)
         
         self._init_weights()
 
